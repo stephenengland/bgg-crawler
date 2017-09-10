@@ -1,0 +1,16 @@
+version: '2.0'
+networks:
+  bggnet:
+    external:
+      name: bggnet
+
+services:
+  bgg-crawler:
+    build: .
+    networks:
+      - bggnet
+    environment:
+      - RDS_DATABASE=postgres
+      - RDS_USER=postgres
+      - RDS_PASSWORD=postgres
+      - RDS_SERVER=postgres
