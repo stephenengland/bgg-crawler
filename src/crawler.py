@@ -2,6 +2,7 @@ import json, requests, time
 from datetime import datetime, timedelta
 from xml.etree import ElementTree
 from xml.dom.minidom import parseString
+from requests.exceptions import Timeout, ReadTimeout
 
 five_days_ago = datetime.now() - timedelta(days=5)
 
@@ -14,6 +15,8 @@ def crawlGames():
         if not game["lastUpdatedOn"] or game["lastUIpdatedOn"] < five_days_ago:
             yield game
 
+    print("Processed All Games")
+
 def crawl():
     has_result = True
     while has_result:
@@ -22,41 +25,74 @@ def crawl():
             crawlGame(game["objectId"])
             has_result = True
 
+    print("Stopping successfully")
+
 def crawlUser(username):
     url = "http://bgg-api-139416041.us-east-1.elb.amazonaws.com/collection/%s" % (username)
     
     retry = True
+    retry_count = 0
 
-    while retry:
-        r = requests.get(url)
-        print(r.status_code, r.reason)
-        result = json.loads(r.content)
+    while retry and retry_count < 10:
+        retry_count += 1
+        try:
+            r = requests.get(url, timeout=60)
+            if r.status_code == requests.codes.ok:
+                result = json.loads(r.content)
 
-        retry = result['updating']
-        print(result)
+                retry = result['updating']
 
-        if retry:
-            time.sleep(3)
-        else:
-            time.sleep(1)
+                if retry:
+                    time.sleep(3)
+                else:
+                    retry = False
+                    time.sleep(1)
+            else:
+                print(r.status_code, r.reason)
+                retry = False
+                time.sleep(25)
+        except (Timeout, ReadTimeout) as ex:
+            print("Timeout getting user collection")
+            time.sleep(30)
+
+    print("Crawled %s" % (username))
 
 def iterateOverUsers(xml):
     comments = xml.getElementsByTagName('comment')
     for comment in comments:
         yield comment.getAttribute("username")
 
+def getType(xml):
+
+    items = xml.getElementsByTagName('item')
+
+    for item in items:
+        return item.getAttribute("type")
+
 def crawlGame(objectId):
     url = "https://www.boardgamegeek.com/xmlapi2/thing?id=%s&ratingcomments=1" % (str(objectId))
-    r = requests.post(url)
+    try:
+        r = requests.post(url, timeout=60)
 
-    xml = parseString(r.content)
+        xml = parseString(r.content)
 
-    for user in iterateOverUsers(xml):
-        crawlUser(user)
+        boardgame_type = getType(xml)
 
-    processedGame(objectId)
+        for user in iterateOverUsers(xml):
+            crawlUser(user)
 
-def processedGame(objectId):
-    url = "http://bgg-api-139416041.us-east-1.elb.amazonaws.com/game/%s/processed" % (str(objectId))
-    requests.post(url)
-    print("Processed Game Id: %s" % (str(objectId)))
+        processedGame(objectId, boardgame_type)
+    except (Timeout, ReadTimeout) as ex:
+        print("Timeout getting game")
+
+def processedGame(objectId, boardgame_type):
+    if boardgame_type == "boardgameexpansion":
+        url = "http://bgg-api-139416041.us-east-1.elb.amazonaws.com/game/%s/processed?expansion=1" % (str(objectId))
+    else:
+        url = "http://bgg-api-139416041.us-east-1.elb.amazonaws.com/game/%s/processed" % (str(objectId))
+
+    try:
+        requests.post(url, timeout=60)
+        print("Processed Game Id: %s" % (str(objectId)))
+    except (Timeout, ReadTimeout) as ex:
+        print("Timeout processing game")
